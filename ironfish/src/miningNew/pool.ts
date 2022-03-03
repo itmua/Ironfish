@@ -49,12 +49,12 @@ export class MiningPool {
 
   recalculateTargetInterval: SetTimeoutToken | null
 
-  constructor(options: { rpc: IronfishIpcClient; logger?: Logger }) {
+  constructor(options: { rpc: IronfishIpcClient; shares: MiningPoolShares; logger?: Logger }) {
     this.rpc = options.rpc
     this.hashRate = new Meter()
     this.logger = options.logger ?? createRootLogger()
     this.stratum = new StratumServer({ pool: this, logger: this.logger })
-    this.shares = new MiningPoolShares()
+    this.shares = options.shares
     this.nextMiningRequestId = 0
     this.miningRequestBlocks = new Map()
     this.currentHeadTimestamp = null
@@ -62,6 +62,7 @@ export class MiningPool {
 
     // Difficulty is set to the expected hashrate that would achieve 1 valid share per second
     // Ex: 100,000,000 would mean a miner with 100 mh/s would submit a valid share on average once per second
+    // TODO: I think we should set it so that an 'average desktop' might only check-in once ever 5-10 minutes
     this.difficulty = BigInt(1_850_000) * 2n
     const basePoolTarget = BigInt(2n ** 256n / this.difficulty)
     this.target = BigIntUtils.toBytesBE(basePoolTarget, 32)
@@ -71,6 +72,15 @@ export class MiningPool {
     this.started = false
 
     this.recalculateTargetInterval = null
+  }
+
+  static async init(options: { rpc: IronfishIpcClient; logger?: Logger }): Promise<MiningPool> {
+    const shares = await MiningPoolShares.init()
+    return new MiningPool({
+      rpc: options.rpc,
+      logger: options.logger,
+      shares,
+    })
   }
 
   start(): void {
@@ -151,7 +161,7 @@ export class MiningPool {
     if (hashedHeader < this.target) {
       this.logger.debug('Valid pool share submitted')
 
-      this.shares.submitShare(graffitiHex, miningRequestId, randomness)
+      await this.shares.submitShare(graffitiHex, miningRequestId, randomness)
 
       const minerHashrate = this.graffitiHashrate(graffitiHex)
       const totalHashrate = this.hashrate()
