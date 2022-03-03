@@ -2,6 +2,7 @@ name: Build NPM Packages
 
 env:
   DEBUG: 'napi:*'
+  TEST: 'napi:*'
   MACOSX_DEPLOYMENT_TARGET: '10.13'
 
 on:
@@ -115,10 +116,10 @@ jobs:
         with:
           image: ${{ matrix.settings.docker }}
           options: -v ${{ env.HOME }}/.cargo/git:/root/.cargo/git -v ${{ env.HOME }}/.cargo/registry:/root/.cargo/registry -v ${{ github.workspace }}:/build -w /build
-          run: yarn test:slow:coverage
+          run: yarn && yarn test:slow:coverage
 
       - name: Run Slow Tests
-        run: yarn test:slow:coverage
+        run: yarn && yarn test:slow:coverage
         if: ${{ !matrix.settings.docker }}
         shell: bash
 
