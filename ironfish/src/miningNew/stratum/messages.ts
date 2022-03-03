@@ -17,6 +17,7 @@ export type StratumMessageMiningSubmit = {
 export type StratumRequest =
   | {
       id: number
+      // TODO: remove ?
       method?: string
     }
   | StratumMessageMiningSubmit
@@ -52,7 +53,7 @@ export type StratumMessageMiningWaitForWork = {
 export type StratumMessageMiningSubscribed = {
   id: number
   method?: string
-  result: number
+  result: string
 }
 
 export type StratumNotification = {

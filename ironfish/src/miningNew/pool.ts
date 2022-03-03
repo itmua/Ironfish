@@ -12,16 +12,22 @@ import { BigIntUtils } from '../utils/bigint'
 import { ErrorUtils } from '../utils/error'
 import { FileUtils } from '../utils/file'
 import { SetTimeoutToken } from '../utils/types'
+import { MiningPoolShares } from './poolShares'
 import { StratumServer, StratumServerClient } from './stratum/stratumServer'
 import { mineableHeaderString } from './utils'
 
 const RECALCULATE_TARGET_TIMEOUT = 10000
+
+// TODO: Live pool will probably use 6-24 hours?
+const HASHRATE_TIME_CUTOFF_SECONDS = 60 // 1 minute
+const HASHRATE_TIME_CUTOFF_MILLISECONDS = HASHRATE_TIME_CUTOFF_SECONDS * 1000
 
 export class MiningPool {
   readonly hashRate: Meter
   readonly stratum: StratumServer
   readonly rpc: IronfishIpcClient
   readonly logger: Logger
+  readonly shares: MiningPoolShares
 
   private started: boolean
   private stopPromise: Promise<void> | null = null
@@ -35,8 +41,7 @@ export class MiningPool {
   // TODO: LRU
   miningRequestBlocks: Map<number, SerializedBlockTemplate>
 
-  // TODO: Difficulty adjustment!
-  // baseTargetValue: number = 1
+  difficulty: bigint
   target: Buffer
 
   currentHeadTimestamp: number | null
@@ -49,13 +54,17 @@ export class MiningPool {
     this.hashRate = new Meter()
     this.logger = options.logger ?? createRootLogger()
     this.stratum = new StratumServer({ pool: this, logger: this.logger })
+    this.shares = new MiningPoolShares()
     this.nextMiningRequestId = 0
     this.miningRequestBlocks = new Map()
     this.currentHeadTimestamp = null
     this.currentHeadDifficulty = null
 
-    this.target = Buffer.alloc(32)
-    this.target.writeUInt32BE(65535)
+    // Difficulty is set to the expected hashrate that would achieve 1 valid share per second
+    // Ex: 100,000,000 would mean a miner with 100 mh/s would submit a valid share on average once per second
+    this.difficulty = BigInt(1_850_000) * 2n
+    const basePoolTarget = BigInt(2n ** 256n / this.difficulty)
+    this.target = BigIntUtils.toBytesBE(basePoolTarget, 32)
 
     this.connectTimeout = null
     this.connectWarned = false
@@ -118,6 +127,10 @@ export class MiningPool {
     randomness: number,
     graffiti: Buffer,
   ): Promise<void> {
+    if (miningRequestId !== this.nextMiningRequestId - 1) {
+      this.logger.debug('Stale share submitted')
+      return
+    }
     const blockTemplate = this.miningRequestBlocks.get(miningRequestId)
 
     if (!blockTemplate) {
@@ -127,7 +140,9 @@ export class MiningPool {
       return
     }
 
-    blockTemplate.header.graffiti = graffiti.toString('hex')
+    const graffitiHex = graffiti.toString('hex')
+
+    blockTemplate.header.graffiti = graffitiHex
     blockTemplate.header.randomness = randomness
 
     const headerBytes = mineableHeaderString(blockTemplate.header)
@@ -135,6 +150,21 @@ export class MiningPool {
 
     if (hashedHeader < this.target) {
       this.logger.debug('Valid pool share submitted')
+
+      this.shares.submitShare(graffitiHex, miningRequestId, randomness)
+
+      const minerHashrate = this.graffitiHashrate(graffitiHex)
+      const totalHashrate = this.hashrate()
+      const minerHashratePercent = (Number(minerHashrate / totalHashrate) * 100).toFixed(2)
+      this.logger.debug(
+        `Hashrate, miner: ${minerHashrate}, total: ${totalHashrate}, ${minerHashratePercent}%`,
+      )
+      const minerShares = this.shares.graffitiShareCount(graffitiHex)
+      const totalShares = this.shares.totalShareCount()
+      const minerSharePercent = ((minerShares / totalShares) * 100).toFixed(2)
+      this.logger.debug(
+        `Shares, miner: ${minerShares}, total: ${totalShares}, ${minerSharePercent}%`,
+      )
     }
 
     if (hashedHeader < Buffer.from(blockTemplate.header.target, 'hex')) {
@@ -249,5 +279,23 @@ export class MiningPool {
     if (this.recalculateTargetInterval) {
       clearInterval(this.recalculateTargetInterval)
     }
+  }
+
+  private hashrate(): number {
+    const timeCutoff = new Date(new Date().getTime() - HASHRATE_TIME_CUTOFF_MILLISECONDS)
+    const totalShares = this.shares.totalShareCountSince(timeCutoff)
+
+    return Number(
+      (BigInt(totalShares) * this.difficulty) / BigInt(HASHRATE_TIME_CUTOFF_SECONDS),
+    )
+  }
+
+  private graffitiHashrate(graffiti: string): number {
+    const timeCutoff = new Date(new Date().getTime() - HASHRATE_TIME_CUTOFF_MILLISECONDS)
+    const totalShares = this.shares.graffitiShareCountSince(graffiti, timeCutoff)
+
+    return Number(
+      (BigInt(totalShares) * this.difficulty) / BigInt(HASHRATE_TIME_CUTOFF_SECONDS),
+    )
   }
 }

@@ -5,6 +5,7 @@ import net from 'net'
 import { Assert } from '../..'
 import { createRootLogger, Logger } from '../../logger'
 import { SerializedBlockTemplate } from '../../serde/BlockTemplateSerde'
+import { GraffitiUtils } from '../../utils/graffiti'
 import { MiningPool } from '../pool'
 import { mineableHeaderString } from '../utils'
 import {
@@ -127,14 +128,15 @@ export class StratumServer {
           case 'mining.subscribe': {
             this.logger.debug('mining.subscribe request received')
 
-            const message = payload as StratumMessageMiningSubscribe
-            const graffiti = Buffer.from(message.params, 'hex')
+            const minerId = Math.floor(Math.random() * Number.MAX_SAFE_INTEGER)
+            const graffiti = GraffitiUtils.fromString(`PoolName.${minerId}`)
 
             client.graffiti = graffiti
             client.subscribed = true
 
-            const response: Omit<StratumMessageMiningSubscribed, 'id'> = {
-              result: client.id,
+            const response: StratumMessageMiningSubscribed = {
+              id: payload.id,
+              result: graffiti.toString('hex'),
             }
 
             this.send(client, response)

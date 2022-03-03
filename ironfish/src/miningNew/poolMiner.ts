@@ -94,6 +94,10 @@ export class MiningPoolMiner {
     this.target = Buffer.from(target, 'hex')
   }
 
+  setGraffiti(graffiti: Buffer): void {
+    this.graffiti = graffiti
+  }
+
   newWork(miningRequestId: number, headerHex: string): void {
     this.logger.info('new work', this.target.toString('hex'), miningRequestId)
     this.miningRequestPayloads[miningRequestId] = Buffer.from(headerHex, 'hex')
@@ -123,7 +127,7 @@ export class MiningPoolMiner {
           'Found block:',
           randomness,
           miningRequestId,
-          `${FileUtils.formatHashRate(this.hashRate.rate1s)}/s`,
+          `${FileUtils.formatHashRate(this.hashRate.rate1m)}/s`,
         )
 
         this.stratum.submit(miningRequestId, randomness, this.graffiti)

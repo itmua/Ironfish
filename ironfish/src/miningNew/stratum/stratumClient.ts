@@ -2,6 +2,7 @@
  * License, v. 2.0. If a copy of the MPL was not distributed with this
  * file, You can obtain one at https://mozilla.org/MPL/2.0/. */
 import net from 'net'
+import { Assert } from '../../assert'
 import { createRootLogger, Logger } from '../../logger'
 import { SetTimeoutToken } from '../../utils/types'
 import { MiningPoolMiner } from '../poolMiner'
@@ -10,6 +11,7 @@ import {
   StratumMessageMiningSetTarget,
   StratumMessageMiningSubmit,
   StratumMessageMiningSubscribe,
+  StratumMessageMiningSubscribed,
   StratumRequest,
   StratumResponse,
 } from './messages'
@@ -20,14 +22,14 @@ export class StratumClient {
   readonly port: number
   readonly miner: MiningPoolMiner
   readonly logger: Logger
-  readonly graffiti: Buffer
 
+  private graffiti: Buffer
   private started: boolean
   private connected: boolean
   private connectWarned: boolean
   private connectTimeout: SetTimeoutToken | null
 
-  requestsSent: { [index: number]: unknown }
+  requestsSent: Map<number, string>
   nextMessageId: number
 
   constructor(options: {
@@ -44,7 +46,7 @@ export class StratumClient {
     this.logger = options.logger ?? createRootLogger()
 
     this.started = false
-    this.requestsSent = {}
+    this.requestsSent = new Map()
     this.nextMessageId = 0
     this.connected = false
     this.connectWarned = false
@@ -116,8 +118,10 @@ export class StratumClient {
       return
     }
 
+    Assert.isNotUndefined(message.method)
+    this.requestsSent.set(message.id, message.method)
+
     this.socket.write(JSON.stringify(message) + '\n')
-    // TODO log requests sent to match responses
   }
 
   private onConnect(): void {
@@ -179,9 +183,26 @@ export class StratumClient {
           default:
             this.logger.info('unrecognized method', payload.method)
         }
+      } else if (payload.id != null) {
+        const responseType = this.requestsSent.get(payload.id)
+        if (responseType == null) {
+          this.logger.info('unrecognized response received', payload)
+          return
+        }
+
+        switch (responseType) {
+          case 'mining.subscribe': {
+            const message = payload as StratumMessageMiningSubscribed
+            this.graffiti = Buffer.from(message.result, 'hex')
+            this.miner.setGraffiti(this.graffiti)
+            break
+          }
+          default: {
+            this.logger.info('unrecognized response', payload)
+          }
+        }
       } else {
-        // TODO: add response handling
-        this.logger.info('response received')
+        this.logger.info('unrecognized message received', payload)
       }
     }
   }
